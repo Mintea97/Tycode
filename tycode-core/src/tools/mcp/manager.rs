@@ -17,6 +17,13 @@ pub struct McpToolDef {
     pub server_name: String,
 }
 
+/// Represents an MCP server that failed to start
+#[derive(Debug, Clone)]
+pub struct McpServerFailure {
+    pub server_name: String,
+    pub error: String,
+}
+
 pub struct McpManager {
     clients: HashMap<String, McpClient>,
     tool_defs: Vec<McpToolDef>,
@@ -31,31 +38,37 @@ impl McpManager {
         }
     }
 
-    /// Creates MCP manager from settings and returns both the manager and ready-to-use tools.
-    /// Returns (manager, tools) tuple where manager is wrapped in Arc<Mutex<>> and each tool holds a reference.
+    /// Creates MCP manager from settings and returns the manager, tools, and any startup failures.
+    /// Returns (manager, tools, failures) tuple where manager is wrapped in Arc<Mutex<>>.
     /// Always returns a valid manager - empty manager when no MCP servers configured.
+    /// Failures are returned for UI notification rather than silently dropped.
     pub async fn from_settings(
         settings: &Settings,
-    ) -> anyhow::Result<(Arc<Mutex<Self>>, Vec<Arc<dyn ToolExecutor>>)> {
+    ) -> (Arc<Mutex<Self>>, Vec<Arc<dyn ToolExecutor>>, Vec<McpServerFailure>) {
         // Early return with empty manager if no MCP servers configured
         if settings.mcp_servers.is_empty() {
             let empty_manager = Self {
                 clients: HashMap::new(),
                 tool_defs: Vec::new(),
             };
-            return Ok((Arc::new(Mutex::new(empty_manager)), Vec::new()));
+            return (Arc::new(Mutex::new(empty_manager)), Vec::new(), Vec::new());
         }
 
         let mut manager = Self {
             clients: HashMap::new(),
             tool_defs: Vec::new(),
         };
+        let mut failures = Vec::new();
 
         for (name, config) in &settings.mcp_servers {
             info!(server_name = %name, command = %config.command, "Initializing MCP server");
 
             if let Err(e) = manager.add_server(name.clone(), config.clone()).await {
                 error!(error = %e, server_name = %name, "Failed to initialize MCP server");
+                failures.push(McpServerFailure {
+                    server_name: name.clone(),
+                    error: e.to_string(),
+                });
             }
         }
 
@@ -76,7 +89,7 @@ impl McpManager {
             .map(|tool| Arc::new(tool) as Arc<dyn ToolExecutor>)
             .collect();
 
-        Ok((wrapped, tools))
+        (wrapped, tools, failures)
     }
 
     pub async fn add_server(

@@ -587,10 +587,16 @@ impl ActorState {
             }
         };
 
-        let (mcp_manager, mcp_tools) = McpManager::from_settings(&settings_snapshot)
-            .await
-            .expect("Failed to initialize MCP manager");
+        let (mcp_manager, mcp_tools, mcp_failures) =
+            McpManager::from_settings(&settings_snapshot).await;
         tools.extend(mcp_tools);
+
+        for failure in mcp_failures {
+            event_sender.add_message(ChatMessage::warning(format!(
+                "Failed to start MCP server '{}': {}. MCP tools from this server will be unavailable.",
+                failure.server_name, failure.error
+            )));
+        }
 
         let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
         let steering = SteeringDocuments::new(
